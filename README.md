@@ -16,3 +16,6 @@
 5. 自動的にDockerコンテナ内で開発環境がセットアップされます。
 
 詳細は[.devcontainer/devcontainer.json](.devcontainer/devcontainer.json)および[Dockerfile](Dockerfile)をご参照
+
+## BipedalWalker-v3 ([Gymnasium](https://gymnasium.farama.org/))
+![demoGIF](./materials/video_BipedalWalker-v3.gif)
