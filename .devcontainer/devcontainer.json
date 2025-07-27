@@ -1,0 +1,7 @@
+{
+    "name": "ray rllib ppo example",
+    "dockerComposeFile": "../docker-compose.yml",
+    "service": "gym-tutorial",
+    "workspaceFolder": "/rllib_ws",
+    "shutdownAction": "stopCompose"
+  }
