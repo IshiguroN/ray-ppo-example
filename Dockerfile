@@ -37,6 +37,7 @@ RUN apt-get update && apt-get install -y \
     tk-dev \
     python3.10-tk \
     vim \
+    git \
     && rm -rf /var/lib/apt/lists/* \
     && ldconfig \
     && ls -l /usr/lib/x86_64-linux-gnu/libGL.so* \

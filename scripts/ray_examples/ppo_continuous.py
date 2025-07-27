@@ -22,86 +22,6 @@ from ray.tune import CheckpointConfig
 
 torch, _ = try_import_torch()
 
-def _make_learner_connector(input_observation_space, input_action_space):
-    return FrameStackingLearner(num_frames=4)
-
-ENVIRONMENT = "BipedalWalker-v3"
-
-config = (
-    PPOConfig()
-    .environment(ENVIRONMENT)
-    # Specify a simple tune hyperparameter sweep.
-    .learners(
-        # Let's start with a small number of learner workers and
-        # add later a tune grid search for these resources.
-        num_learners=1,
-        num_gpus_per_learner=1,
-    )
-    # TODO (simon): Adjust to new model_config_dict.
-    .training(
-        # Following the paper.
-        train_batch_size_per_learner=4000,
-        minibatch_size=128,
-        lambda_=0.95,
-        kl_coeff=0.5,
-        clip_param=0.1,
-        vf_clip_param=10.0,
-        entropy_coeff=0.01,
-        num_epochs=10,
-        lr=0.00015 * 1,
-        grad_clip=100.0,
-        grad_clip_by="global_norm",
-        model={
-            "fcnet_hiddens": [64, 64],
-            "fcnet_activation": "tanh",
-            "vf_share_layers": True,
-        },
-    )
-    .reporting(
-        metrics_num_episodes_for_smoothing=5,
-        min_sample_timesteps_per_iteration=1000,
-    )
-    .evaluation(
-        evaluation_duration="auto",
-        evaluation_interval=1,
-        evaluation_num_env_runners=1,
-        evaluation_parallel_to_training=True,
-        evaluation_config={
-            "explore": True,
-        },
-    )
-)
-
-
-parser = add_rllib_example_script_args(default_reward=200.0)
-parser.add_argument(
-    "--use-onnx-for-inference",
-    action="store_true",
-    help="Whether to convert the loaded module to ONNX format and then perform "
-    "inference through this ONNX model.",
-)
-parser.add_argument(
-    "--explore-during-inference",
-    action="store_true",
-    help="Whether the trained policy should use exploration during action "
-    "inference.",
-)
-parser.add_argument(
-    "--num-episodes-during-inference",
-    type=int,
-    default=10,
-    help="Number of episodes to do inference over (after restoring from a checkpoint).",
-)
-parser.set_defaults(
-    # Make sure that - by default - we produce checkpoints during training.
-    checkpoint_freq=1,
-    checkpoint_at_end=True,
-    # Use CartPole-v1 by default.
-    env=ENVIRONMENT,
-)
-
-
-
 
 def train_ray_sample(config):
     # Create a Tuner instance to manage the trials.
@@ -118,7 +38,7 @@ def train_ray_sample(config):
             checkpoint_config=CheckpointConfig(
                 num_to_keep=5,
                 checkpoint_frequency=10,
-                checkpoint_score_attribute="episode_reward_mean",
+                checkpoint_score_attribute="evaluation/env_runners/episode_return_mean",
                 checkpoint_at_end=True
             ),
             verbose=1,  # ログ出力を詳細に
@@ -142,10 +62,22 @@ def inference(best_checkpoint, args):
     # Create only the neural network (RLModule) from our algorithm checkpoint.
     # See here (https://docs.ray.io/en/master/rllib/checkpoints.html)
     # to learn more about checkpointing and the specific "path" used.
-    print("best_checkpoint.path:", best_checkpoint.path)
     # best_checkpoint_path = "/root/ray_results/PPO_2025-07-22_13-56-08/PPO_BipedalWalker-v3_9f234_00000_0_2025-07-22_13-56-10/checkpoint_000029"
+    if best_checkpoint:
+        best_checkpoint_path = best_checkpoint.path
+    else:
+        best_checkpoint_path = args.checkpoint_file
+    print()
+    print("#" * 100)
+    print("best_checkpoint.path:", best_checkpoint_path)
+    print()
+    print("If you want to use this checkpoint for inference, please execute the script with the ")
+    print()
+    print("            python3 scripts/ray_examples/ppo_continuous.py -f <path_to_checkpoint>")
+    print("#" * 100)
+    print()
     rl_module = RLModule.from_checkpoint(
-        Path(best_checkpoint.path)
+        Path(best_checkpoint_path)
         / "learner_group"
         / "learner"
         / "rl_module"
@@ -153,7 +85,7 @@ def inference(best_checkpoint, args):
     )
 
     # Create the RL environment to test against (same as was used for training earlier).
-    env = gym.make(ENVIRONMENT, render_mode="human")
+    env = gym.make(args.env, render_mode="human")
 
     episode_return = 0.0
     done = False
@@ -190,88 +122,12 @@ def inference(best_checkpoint, args):
 
     print(f"Reached episode return of {episode_return}.")
 
-    # print("Restore RLModule from checkpoint ...", end="")
-    # rl_module = RLModule.from_checkpoint(
-    #     os.path.join(
-    #         best_result.checkpoint.path,
-    #         "learner_group",
-    #         "learner",
-    #         "rl_module",
-    #         DEFAULT_MODULE_ID,
-    #     )
-    # )
-    # ort_session = None
-    # # print(" ok")
-
-    # # Create an env to do inference in.
-    # # env = gym.make(args.env)
-    # # obs, info = env.reset()
-
-    # num_episodes = 0
-    # episode_return = 0.0
-
-    # while num_episodes < args.num_episodes_during_inference:
-    #     # Compute an action using a B=1 observation "batch".
-    #     input_dict = {Columns.OBS: np.expand_dims(obs, 0)}
-    #     if not args.use_onnx_for_inference:
-    #         input_dict = {Columns.OBS: torch.from_numpy(obs).unsqueeze(0)}
-
-    #     # If ONNX and module has not been exported yet, do this here using
-    #     # the input_dict as example input.
-    #     elif ort_session is None:
-    #         tensor_input_dict = {Columns.OBS: torch.from_numpy(obs).unsqueeze(0)}
-    #         torch.onnx.export(rl_module, {"batch": tensor_input_dict}, f="test.onnx")
-    #         ort_session = onnxruntime.InferenceSession(
-    #             "test.onnx", providers=["CPUExecutionProvider"]
-    #         )
-
-    #     # No exploration (using ONNX).
-    #     if ort_session is not None:
-    #         rl_module_out = ort_session.run(
-    #             None,
-    #             {
-    #                 key.name: val
-    #                 for key, val in dict(
-    #                     zip(
-    #                         tree.flatten(ort_session.get_inputs()),
-    #                         tree.flatten(input_dict),
-    #                     )
-    #                 ).items()
-    #             },
-    #         )
-    #         # [0]=encoder outs; [1]=action logits
-    #         rl_module_out = {Columns.ACTION_DIST_INPUTS: rl_module_out[1]}
-    #     # No exploration (using RLModule).
-    #     elif not args.explore_during_inference:
-    #         rl_module_out = rl_module.forward_inference(input_dict)
-    #     # W/ exploration (using RLModule).
-    #     else:
-    #         rl_module_out = rl_module.forward_exploration(input_dict)
-
-    #     # For discrete action spaces used here, normally, an RLModule "only"
-    #     # produces action logits, from which we then have to sample.
-    #     # However, you can also write custom RLModules that output actions
-    #     # directly, performing the sampling step already inside their
-    #     # `forward_...()` methods.
-    #     logits = convert_to_numpy(rl_module_out[Columns.ACTION_DIST_INPUTS])
-    #     # Perform the sampling step in numpy for simplicity.
-    #     action = np.random.choice(env.action_space.n, p=softmax(logits[0]))
-    #     # Send the computed action `a` to the env.
-    #     obs, reward, terminated, truncated, _ = env.step(action)
-    #     episode_return += reward
-    #     # Is the episode `done`? -> Reset.
-    #     if terminated or truncated:
-    #         print(f"Episode done: Total reward = {episode_return}")
-    #         obs, info = env.reset()
-    #         num_episodes += 1
-    #         episode_return = 0.0
-
-    # print(f"Done performing action inference through {num_episodes} Episodes")
-
-def main(args):
+def main(args, config):
     # Train the RL algorithm and get the best checkpoint.
-    best_checkpoint = train_ray_sample(config)
-    # best_checkpoint = None
+    if args.checkpoint_file:
+        best_checkpoint = None
+    else:
+        best_checkpoint = train_ray_sample(config)
 
     # Perform inference using the best checkpoint.
     inference(best_checkpoint, args)
@@ -279,6 +135,83 @@ def main(args):
     print("Done with training and inference.")
 
 if __name__ == "__main__":
+    parser = add_rllib_example_script_args(default_reward=200.0)
+    parser.add_argument(
+        "--explore-during-inference",
+        action="store_true",
+        help="Whether the trained policy should use exploration during action "
+        "inference.",
+    )
+    parser.add_argument(
+        "--num-episodes-during-inference",
+        type=int,
+        default=10,
+        help="Number of episodes to do inference over (after restoring from a checkpoint).",
+    )
+    parser.set_defaults(
+        # Make sure that - by default - we produce checkpoints during training.
+        checkpoint_freq=1,
+        checkpoint_at_end=True,
+        # Use "BipedalWalker-v3" by default.
+        env="BipedalWalker-v3",
+    )
+    parser.add_argument(
+        "-f",
+        "--checkpoint-file",
+        type=str,
+        default="",
+        help="Path to a checkpoint file to use for inference. ",
+    )
     args = parser.parse_args()
 
-    main(args)
+    config = (
+        PPOConfig()
+        .environment(args.env)
+        # Specify a simple tune hyperparameter sweep.
+        .env_runners(
+            # Following the paper.
+            num_env_runners=8
+            # rollout_fragment_length=64,
+        )
+        .learners(
+            # Let's start with a small number of learner workers and
+            # add later a tune grid search for these resources.
+            num_learners=1,
+            num_gpus_per_learner=1,
+        )
+        # TODO (simon): Adjust to new model_config_dict.
+        .training(
+            # Following the paper.
+            train_batch_size_per_learner=4000,
+            minibatch_size=128,
+            lambda_=0.95,
+            kl_coeff=0.5,
+            clip_param=0.1,
+            vf_clip_param=10.0,
+            entropy_coeff=0.01,
+            num_epochs=10,
+            lr=0.00015 * 1,
+            grad_clip=100.0,
+            grad_clip_by="global_norm",
+            model={
+                "fcnet_hiddens": [64, 64],
+                "fcnet_activation": "tanh",
+                "vf_share_layers": True,
+            },
+        )
+        .reporting(
+            metrics_num_episodes_for_smoothing=5,
+            min_sample_timesteps_per_iteration=1000,
+        )
+        .evaluation(
+            evaluation_duration="auto",
+            evaluation_interval=1,
+            evaluation_num_env_runners=1,
+            evaluation_parallel_to_training=True,
+            evaluation_config={
+                "explore": True,
+            },
+        )
+    )
+
+    main(args, config)
