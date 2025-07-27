@@ -1,3 +1,6 @@
+import os
+import imageio
+
 from ray import train, tune
 from ray.rllib.algorithms.ppo import PPOConfig
 
@@ -85,10 +88,16 @@ def inference(best_checkpoint, args):
     )
 
     # Create the RL environment to test against (same as was used for training earlier).
-    env = gym.make(args.env, render_mode="human")
+    if args.video_save:
+        render_mode = "rgb_array"
+    else:
+        render_mode = "human"
+    env = gym.make(args.env, render_mode=render_mode)
 
     episode_return = 0.0
     done = False
+
+    frames = []
 
     # Reset the env to get the initial observation.
     obs, info = env.reset()
@@ -120,7 +129,16 @@ def inference(best_checkpoint, args):
         episode_return += reward
         done = terminated or truncated
 
+        if args.video_save:
+            frames.append(env.render())
+
     print(f"Reached episode return of {episode_return}.")
+    if args.video_save:
+        imageio.mimsave(
+            os.path.join(best_checkpoint_path, f"video_{args.env}.gif"),
+            frames,
+            fps=30,
+        )
 
 def main(args, config):
     # Train the RL algorithm and get the best checkpoint.
@@ -161,6 +179,12 @@ if __name__ == "__main__":
         type=str,
         default="",
         help="Path to a checkpoint file to use for inference. ",
+    )
+    parser.add_argument(
+        "-v",
+        "--video-save",
+        action="store_true",
+        help="whether to save videos of the inference runs.",
     )
     args = parser.parse_args()
 
